@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  TEACHER
+  STUDENT
+}
+
+enum BloomLevel {
+  REMEMBER
+  UNDERSTAND
+  APPLY
+  ANALYZE
+  EVALUATE
+  CREATE
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  SHORT_ANSWER
+  FILL_BLANK
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionStatus {
+  DRAFT
+  ACCEPTED
+  DISCARDED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  GRADED
+}
+
+enum AnswerStatus {
+  CORRECT
+  INCORRECT
+  PENDING_REVIEW
+  PARTIAL
+}
+
+enum ExportFormat {
+  PDF
+  DOCX
+  GOOGLE_FORMS
+}
+
+enum SourceType {
+  PDF
+  DOCX
+  TEXT
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  passwordHash     String
+  displayName      String
+  bio              String?   @db.Text
+  role             UserRole
+  createdAt        DateTime  @default(now())
+  lastLoginAt      DateTime?
+  refreshTokenHash String?
+
+  sources     Source[]
+  questions   Question[]
+  tests       Test[]
+  ownedGroups Group[]           @relation("TeacherGroups")
+  exports     Export[]
+  memberships GroupMembership[]
+  attempts    Attempt[]
+
+  @@index([role])
+}
+
+model Source {
+  id          String     @id @default(cuid())
+  ownerId     String
+  owner       User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  filename    String
+  type        SourceType
+  storagePath String?
+  rawText     String     @db.Text
+  charCount   Int
+  createdAt   DateTime   @default(now())
+
+  questions Question[]
+
+  @@index([ownerId])
+}
+
+model Question {
+  id          String         @id @default(cuid())
+  ownerId     String
+  owner       User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sourceId    String?
+  source      Source?        @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  type        QuestionType
+  bloomLevel  BloomLevel
+  stem        String         @db.Text
+  payload     Json
+  explanation String?        @db.Text
+  topic       String?
+  difficulty  QuestionDifficulty @default(MEDIUM)
+  status      QuestionStatus @default(DRAFT)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  testLinks      TestQuestion[]
+  attemptAnswers AttemptAnswer[]
+
+  @@index([ownerId, status])
+  @@index([type])
+  @@index([bloomLevel])
+  @@index([topic])
+}
+
+model Test {
+  id          String   @id @default(cuid())
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  title       String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  questions   TestQuestion[]
+  assignments Assignment[]
+  exports     Export[]
+
+  @@index([ownerId])
+}
+
+model TestQuestion {
+  testId     String
+  questionId String
+  order      Int
+
+  test     Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([testId, questionId])
+  @@index([testId, order])
+}
+
+model Group {
+  id         String   @id @default(cuid())
+  teacherId  String
+  teacher    User     @relation("TeacherGroups", fields: [teacherId], references: [id], onDelete: Cascade)
+  name       String
+  inviteCode String   @unique
+  createdAt  DateTime @default(now())
+
+  members     GroupMembership[]
+  assignments AssignmentGroup[]
+
+  @@index([teacherId])
+}
+
+model GroupMembership {
+  groupId   String
+  studentId String
+  joinedAt  DateTime @default(now())
+
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, studentId])
+  @@index([studentId])
+}
+
+model Assignment {
+  id           String   @id @default(cuid())
+  testId       String
+  test         Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  deadline     DateTime
+  timeLimitSec Int?     // null = no time limit; otherwise wall-clock seconds from start
+  allowRetakes Boolean  @default(false)
+  autoSave     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  groups   AssignmentGroup[]
+  attempts Attempt[]
+
+  @@index([testId])
+  @@index([deadline])
+}
+
+model AssignmentGroup {
+  assignmentId String
+  groupId      String
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  group      Group      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([assignmentId, groupId])
+}
+
+model Attempt {
+  id           String        @id @default(cuid())
+  assignmentId String
+  studentId    String
+  status       AttemptStatus @default(IN_PROGRESS)
+  score        Float?
+  totalPoints  Int           @default(0)
+  earnedPoints Float         @default(0)
+  startedAt    DateTime      @default(now())
+  submittedAt  DateTime?
+  timeSpentSec Int?
+  warnings     Json?
+
+  assignment Assignment      @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student    User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  answers    AttemptAnswer[]
+
+  @@index([studentId])
+  @@index([assignmentId])
+  @@index([status])
+}
+
+model AttemptAnswer {
+  id         String       @id @default(cuid())
+  attemptId  String
+  questionId String
+  response   Json
+  status     AnswerStatus
+  points     Float        @default(0)
+  feedback   String?      @db.Text
+  answeredAt DateTime     @default(now())
+
+  attempt  Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, questionId])
+  @@index([questionId])
+}
+
+model Export {
+  id          String       @id @default(cuid())
+  testId      String
+  ownerId     String
+  format      ExportFormat
+  storagePath String?
+  externalUrl String?
+  createdAt   DateTime     @default(now())
+
+  test  Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([testId])
+}

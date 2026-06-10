@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: quizai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quizai
+      POSTGRES_PASSWORD: quizai
+      POSTGRES_DB: quizai
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"   # exposed on 5433 to avoid clashing with your local Postgres on 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quizai -d quizai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: quizai-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://quizai:quizai@db:5432/quizai?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-access-secret-change-me}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret-change-me}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      PORT: 4000
+      NODE_ENV: production
+      CORS_ORIGIN: http://localhost:8080
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_PRIMARY_MODEL: gpt-4o
+      OPENAI_FALLBACK_MODEL: gpt-4o-mini
+      UPLOAD_DIR: /app/uploads
+      MAX_UPLOAD_MB: 15
+    volumes:
+      - backend-uploads:/app/uploads
+    ports:
+      - "4000:4000"   # exposed so you can hit /api/v1/docs directly during dev
+
+  frontend:
+    build: ./frontend
+    container_name: quizai-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"     # open http://localhost:8080
+
+  # One-shot seed runner (run on demand via: docker compose run --rm seed)
+  seed:
+    build: ./backend
+    container_name: quizai-seed
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://quizai:quizai@db:5432/quizai?schema=public
+    profiles: ["tools"]
+    entrypoint: ["sh", "-c", "npx prisma migrate deploy && npx tsx prisma/seed.ts"]
+
+volumes:
+  postgres-data:
+  backend-uploads:
